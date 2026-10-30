@@ -4,16 +4,11 @@ from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# ===== CẤU HÌNH: điền 3 dòng dưới (repo GitHub phải để Private) =====
-BOT_TOKEN = "9294891883:AAHsv-TTxyop9p_nCtqPEoPuaP3NXoo0bAk"
-MINIAPP_URL = "https://anbuoi28.onrender.com"
-ADMIN_IDS_TEXT = "6685909406"  # nhiều admin thì cách nhau bằng dấu phẩy: 111,222
-# ====================================================================
-TOKEN = os.environ.get("BOT_TOKEN", BOT_TOKEN)
-URL = os.environ.get("MINIAPP_URL", MINIAPP_URL)
-ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", ADMIN_IDS_TEXT).split(",") if x.strip().isdigit()}
+TOKEN = os.environ["BOT_TOKEN"]
+URL = os.environ["MINIAPP_URL"]  # link công khai của chính server này
+ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
 START = int(os.environ.get("START_BAL", "0"))  # điểm ảo tặng người mới
-BET_SEC, COVER_SEC, RESULT_SEC, ODDS = 60, 15, 6, 1.97
+BET_SEC, COVER_SEC, ODDS = 60, 15, 1.97  # hết giờ mở bát là sang phiên mới ngay
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 db = sqlite3.connect(os.environ.get("DB_PATH", os.path.join(HERE, "taixiu.db")), check_same_thread=False)
@@ -23,7 +18,7 @@ create table if not exists users(uid integer primary key, name text, bal integer
 create table if not exists bets(rid integer, uid integer, side text, amt integer);
 create table if not exists rounds(id integer primary key, d1 integer, d2 integer, d3 integer);
 """)
-G = {"id": 0, "phase": "bet", "end": 0.0, "dice": None}
+G = {"id": 0, "phase": "bet", "end": 0.0, "dice": None, "last": None, "force": None}
 
 
 def ensure(uid, name="?"):
@@ -54,6 +49,11 @@ def win_side(d):
     return "tai" if sum(d) >= 11 else "xiu"
 
 
+def net_of(my, w):
+    """Lãi/lỗ của một người chơi: tiền thắng trả về trừ tổng tiền cược."""
+    return (int(my.get(w, 0) * ODDS) if w else 0) - sum(my.values())
+
+
 def settle(rid, d):
     db.execute("insert into rounds values(?,?,?,?)", (rid, *d))
     w = win_side(d)
@@ -71,17 +71,30 @@ def refund_unsettled():
     db.commit()
 
 
+def roll():
+    """Tung 3 xúc xắc; nếu admin đã /ep thì dùng kết quả ép (chỉ áp dụng 1 phiên)."""
+    f, G["force"] = G["force"], None
+    if isinstance(f, list):
+        return f
+    if f == "bao":
+        return [random.randint(1, 6)] * 3
+    while True:
+        d = [random.randint(1, 6) for _ in range(3)]
+        if f is None or win_side(d) == f:
+            return d
+
+
 async def game_loop():
     while True:
         rid = db.execute("select coalesce(max(id),0)+1 from rounds").fetchone()[0]
         G.update(id=rid, phase="bet", end=time.time() + BET_SEC, dice=None)
         await asyncio.sleep(BET_SEC)
-        d = [random.randint(1, 6) for _ in range(3)]
+        d = roll()
         G.update(phase="cover", end=time.time() + COVER_SEC, dice=d)  # úp bát
         await asyncio.sleep(COVER_SEC)
         settle(rid, d)
-        G.update(phase="result", end=time.time() + RESULT_SEC)
-        await asyncio.sleep(RESULT_SEC)
+        # Không chờ nữa: vòng lặp sang phiên mới ngay, kết quả phiên cũ gửi kèm trong "last"
+        G["last"] = {"id": rid, "dice": d, "t": time.time()}
 
 
 def tot(side):
@@ -105,8 +118,14 @@ async def state(req):
     }
     if d:
         out["win"] = win_side(d)
-        if G["phase"] == "result":
-            out["net"] = (int(my.get(out["win"], 0) * ODDS) if out["win"] else 0) - sum(my.values())
+        out["net"] = net_of(my, out["win"])  # để client chớp kết quả ngay khi kéo bát
+    last = G["last"]
+    if last:
+        lmy = {r["side"]: r["a"] for r in db.execute(
+            "select side,sum(amt) a from bets where rid=? and uid=? group by side", (last["id"], uid))}
+        lw = win_side(last["dice"])
+        out["last"] = {"id": last["id"], "dice": last["dice"], "win": lw, "my": lmy,
+                       "net": net_of(lmy, lw), "ago": time.time() - last["t"]}
     return web.json_response(out)
 
 
@@ -170,10 +189,30 @@ async def nap(u: Update, c: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+async def ep(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Admin: /ep 1 4 3 (ép 3 xúc xắc) | /ep t (Tài) | /ep x (Xỉu) | /ep b (Bão) | /ep huy (bỏ ép)."""
+    if u.effective_user.id not in ADMINS:
+        return
+    a = [x.lower() for x in (c.args or [])]
+    nxt = G["id"] if G["phase"] == "bet" else G["id"] + 1  # phiên sẽ bị ép
+    if len(a) == 3 and all(x in list("123456") for x in a):
+        G["force"] = [int(x) for x in a]
+        txt = f"Đã ép phiên #{nxt}: {' - '.join(a)} = {sum(map(int, a))}"
+    elif len(a) == 1 and a[0] in ("t", "tai", "x", "xiu", "b", "bao"):
+        G["force"] = {"t": "tai", "x": "xiu", "b": "bao"}.get(a[0], a[0])
+        txt = f"Đã ép phiên #{nxt} về {G['force'].upper()}"
+    elif a and a[0] in ("huy", "off", "0"):
+        G["force"] = None
+        txt = "Đã bỏ ép."
+    else:
+        txt = "Cú pháp: /ep 1 4 3 | /ep t | /ep x | /ep b | /ep huy"
+    await u.message.reply_text(txt)
+
+
 async def main():
     refund_unsettled()
     app = Application.builder().token(TOKEN).build()
-    for n, h in (("start", start), ("id", myid), ("sodu", sodu), ("nap", nap)):
+    for n, h in (("start", start), ("id", myid), ("sodu", sodu), ("nap", nap), ("ep", ep)):
         app.add_handler(CommandHandler(n, h))
     await app.initialize(); await app.start(); await app.updater.start_polling()
 

@@ -10,7 +10,7 @@ URL = os.environ.get("MINIAPP_URL", "https://anbuoi28.onrender.com")  # link cô
 ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "7884394252").split(",") if x.strip()}
 START = int(os.environ.get("START_BAL", "0"))  # điểm ảo tặng người mới
 BET_SEC, COVER_SEC, ODDS = 60, 15, 1.97  # hết giờ mở bát là sang phiên mới ngay
-JP_RATE = 0.02            # 2% số phiên nổ hũ
+JP_RATE = 0.0             # 0% = không bao giờ tự nổ; chỉ nổ khi admin ép (/ep hu hoặc /ep 1 1 1, /ep 6 6 6)
 JP_MIN, JP_MAX = 10, 12   # mỗi người trúng hũ nhận x10 đến x12 tiền cược của mình
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -141,10 +141,15 @@ def refund_unsettled():
 
 def roll(rid):
     """Tung 3 xúc xắc; nếu admin đã /ep thì dùng kết quả ép (chỉ áp dụng 1 phiên).
-    Nổ hũ (3 con 1 / 3 con 6) chỉ xảy ra với xác suất JP_RATE, khi hũ > 0 và có người đặt đúng cửa."""
+    Nổ hũ (3 con 1 / 3 con 6) mặc định KHÔNG BAO GIỜ tự ra (JP_RATE = 0), chỉ nổ khi admin ép."""
     f, G["force"] = G["force"], None
     if isinstance(f, list):
         return f
+    if f == "hu":  # admin ép nổ hũ: ra 3 con 1 / 3 con 6 theo cửa đang có người cược
+        sides = jp_sides(rid)
+        if sides:
+            return [1, 1, 1] if random.choice(sides) == "xiu" else [6, 6, 6]
+        f = None
     if f == "bao":
         return [random.randint(2, 5)] * 3  # bão thường, không nổ hũ
     sides = jp_sides(rid) if get_pot() > 0 else []
@@ -302,7 +307,7 @@ async def hu(u: Update, c: ContextTypes.DEFAULT_TYPE):
 
 
 async def ep(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    """Admin: /ep 1 4 3 (ép 3 xúc xắc) | /ep t (Tài) | /ep x (Xỉu) | /ep b (Bão) | /ep huy (bỏ ép)."""
+    """Admin: /ep 1 4 3 (ép 3 xúc xắc) | /ep t (Tài) | /ep x (Xỉu) | /ep b (Bão) | /ep hu (nổ hũ) | /ep huy (bỏ ép)."""
     if u.effective_user.id not in ADMINS:
         return
     a = [x.lower() for x in (c.args or [])]
@@ -310,14 +315,16 @@ async def ep(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if len(a) == 3 and all(x in list("123456") for x in a):
         G["force"] = [int(x) for x in a]
         txt = f"Đã ép phiên #{nxt}: {' - '.join(a)} = {sum(map(int, a))}"
-    elif len(a) == 1 and a[0] in ("t", "tai", "x", "xiu", "b", "bao"):
-        G["force"] = {"t": "tai", "x": "xiu", "b": "bao"}.get(a[0], a[0])
-        txt = f"Đã ép phiên #{nxt} về {G['force'].upper()}"
+        if len(set(a)) == 1 and a[0] in "16":
+            txt += "\n(3 con 1 / 3 con 6 = nổ hũ)" + ("" if get_pot() > 0 else "\n⚠ Hũ đang 0, hãy /hu <số tiền> trước, nếu không chỉ tính là bão.")
+    elif len(a) == 1 and a[0] in ("t", "tai", "x", "xiu", "b", "bao", "hu", "nohu"):
+        G["force"] = {"t": "tai", "x": "xiu", "b": "bao", "nohu": "hu"}.get(a[0], a[0])
+        txt = f"Đã ép phiên #{nxt} về {'NỔ HŨ' if G['force'] == 'hu' else G['force'].upper()}"
     elif a and a[0] in ("huy", "off", "0"):
         G["force"] = None
         txt = "Đã bỏ ép."
     else:
-        txt = "Cú pháp: /ep 1 4 3 | /ep t | /ep x | /ep b | /ep huy"
+        txt = "Cú pháp: /ep 1 4 3 | /ep t | /ep x | /ep b | /ep hu (nổ hũ) | /ep huy"
     await u.message.reply_text(txt)
 
 

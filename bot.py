@@ -4,9 +4,10 @@ from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-TOKEN = os.environ["BOT_TOKEN"]
-URL = os.environ["MINIAPP_URL"]  # link công khai của chính server này
-ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
+# Giá trị mặc định ghi thẳng trong code; nếu có đặt biến môi trường trên Render thì biến đó được ưu tiên
+TOKEN = os.environ.get("BOT_TOKEN", "9294891883:AAHsv-TTxyop9p_nCtqPEoPuaP3NXoo0bAk")
+URL = os.environ.get("MINIAPP_URL", "https://anbuoi28.onrender.com")  # link công khai của chính server này
+ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "7884394252").split(",") if x.strip()}
 START = int(os.environ.get("START_BAL", "0"))  # điểm ảo tặng người mới
 BET_SEC, COVER_SEC, ODDS = 60, 15, 1.97  # hết giờ mở bát là sang phiên mới ngay
 HERE = os.path.dirname(os.path.abspath(__file__))

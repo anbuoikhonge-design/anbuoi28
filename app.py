@@ -4,9 +4,14 @@ from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-TOKEN = os.environ["BOT_TOKEN"]
-URL = os.environ["MINIAPP_URL"]  # link công khai của chính server này
-ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
+# ===== CẤU HÌNH: điền 3 dòng dưới (repo GitHub phải để Private) =====
+BOT_TOKEN = "9294891883:AAHsv-TTxyop9p_nCtqPEoPuaP3NXoo0bAk"
+MINIAPP_URL = "https://anbuoi28.onrender.com"
+ADMIN_IDS_TEXT = "6685909406"  # nhiều admin thì cách nhau bằng dấu phẩy: 111,222
+# ====================================================================
+TOKEN = os.environ.get("BOT_TOKEN", BOT_TOKEN)
+URL = os.environ.get("MINIAPP_URL", MINIAPP_URL)
+ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", ADMIN_IDS_TEXT).split(",") if x.strip().isdigit()}
 START = int(os.environ.get("START_BAL", "0"))  # điểm ảo tặng người mới
 BET_SEC, COVER_SEC, RESULT_SEC, ODDS = 60, 15, 6, 1.97
 HERE = os.path.dirname(os.path.abspath(__file__))

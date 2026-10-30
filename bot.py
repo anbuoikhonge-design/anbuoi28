@@ -1,4 +1,4 @@
-import os, json, hmac, hashlib, time, random, sqlite3, asyncio
+import os, re, json, hmac, hashlib, time, random, sqlite3, asyncio
 from urllib.parse import parse_qsl
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -10,6 +10,8 @@ URL = os.environ.get("MINIAPP_URL", "https://anbuoi28.onrender.com")  # link cô
 ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "7884394252").split(",") if x.strip()}
 START = int(os.environ.get("START_BAL", "0"))  # điểm ảo tặng người mới
 BET_SEC, COVER_SEC, ODDS = 60, 15, 1.97  # hết giờ mở bát là sang phiên mới ngay
+JP_RATE = 0.02            # 2% số phiên nổ hũ
+JP_MIN, JP_MAX = 10, 12   # mỗi người trúng hũ nhận x10 đến x12 tiền cược của mình
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 db = sqlite3.connect(os.environ.get("DB_PATH", os.path.join(HERE, "taixiu.db")), check_same_thread=False)
@@ -18,13 +20,67 @@ db.executescript("""
 create table if not exists users(uid integer primary key, name text, bal integer default 0);
 create table if not exists bets(rid integer, uid integer, side text, amt integer);
 create table if not exists rounds(id integer primary key, d1 integer, d2 integer, d3 integer);
+create table if not exists kv(k text primary key, v text);
 """)
-G = {"id": 0, "phase": "bet", "end": 0.0, "dice": None, "last": None, "force": None}
+G = {"id": 0, "phase": "bet", "end": 0.0, "dice": None, "last": None, "force": None, "jp": None}
 
 
 def ensure(uid, name="?"):
     db.execute("insert or ignore into users(uid,name,bal) values(?,?,?)", (uid, name, START))
     db.commit()
+
+
+# ---------- Hũ jackpot ----------
+def get_pot():
+    r = db.execute("select v from kv where k='pot'").fetchone()
+    return int(r[0]) if r else 0
+
+
+def set_pot(v):
+    db.execute("insert or replace into kv(k,v) values('pot',?)", (str(max(0, int(v))),))
+    db.commit()
+
+
+def is_jp_dice(d):
+    """Nổ hũ khi ra 3 con 1 hoặc 3 con 6."""
+    return d[0] == d[1] == d[2] and d[0] in (1, 6)
+
+
+def jp_side(d):
+    """3 con 1 (tổng 3) = cửa Xỉu, 3 con 6 (tổng 18) = cửa Tài."""
+    return "xiu" if d[0] == 1 else "tai"
+
+
+def jp_sides(rid):
+    return [s for s in ("xiu", "tai") if db.execute("select 1 from bets where rid=? and side=?", (rid, s)).fetchone()]
+
+
+def jp_plan(rid, d):
+    """Tính trước tiền nổ hũ của từng người (cược càng nhiều nhận càng nhiều, chỉ người đặt đúng cửa)."""
+    if not is_jp_dice(d):
+        return None
+    pot, side = get_pot(), jp_side(d)
+    rows = db.execute(
+        "select b.uid uid, sum(b.amt) a, u.name name from bets b left join users u on u.uid=b.uid "
+        "where b.rid=? and b.side=? group by b.uid", (rid, side)).fetchall()
+    if pot <= 0 or not rows:
+        return None
+    raw = {r["uid"]: int(r["a"] * random.uniform(JP_MIN, JP_MAX)) for r in rows}
+    tot = sum(raw.values())
+    if tot > pot:  # hũ không đủ thì chia theo tỉ lệ
+        raw = {u: int(a * pot / tot) for u, a in raw.items()}
+    pay = {u: a for u, a in raw.items() if a > 0}
+    if not pay:
+        return None
+    return {"id": rid, "dice": d, "side": side, "pay": pay, "total": sum(pay.values()),
+            "names": {r["uid"]: (r["name"] or "?") for r in rows}, "bets": {r["uid"]: r["a"] for r in rows}}
+
+
+def jp_view(p, uid):
+    top = sorted(p["pay"].items(), key=lambda x: -x[1])[:5]
+    return {"id": p["id"], "side": p["side"], "total": p["total"], "n": len(p["pay"]),
+            "me": p["pay"].get(uid, 0),
+            "top": [{"name": p["names"][u], "bet": p["bets"][u], "amt": a, "me": u == uid} for u, a in top]}
 
 
 def auth(init):
@@ -55,12 +111,23 @@ def net_of(my, w):
     return (int(my.get(w, 0) * ODDS) if w else 0) - sum(my.values())
 
 
-def settle(rid, d):
+def round_net(my, d, plan, uid):
+    if plan:  # phiên nổ hũ: tiền hũ trừ tổng tiền cược
+        return plan["pay"].get(uid, 0) - sum(my.values())
+    return net_of(my, win_side(d))
+
+
+def settle(rid, d, plan=None):
     db.execute("insert into rounds values(?,?,?,?)", (rid, *d))
-    w = win_side(d)
-    if w:
-        for b in db.execute("select uid,amt from bets where rid=? and side=?", (rid, w)).fetchall():
-            db.execute("update users set bal=bal+? where uid=?", (int(b["amt"] * ODDS), b["uid"]))
+    if plan:
+        for uid, amt in plan["pay"].items():
+            db.execute("update users set bal=bal+? where uid=?", (amt, uid))
+        set_pot(get_pot() - plan["total"])
+    else:
+        w = win_side(d)
+        if w:
+            for b in db.execute("select uid,amt from bets where rid=? and side=?", (rid, w)).fetchall():
+                db.execute("update users set bal=bal+? where uid=?", (int(b["amt"] * ODDS), b["uid"]))
     db.commit()
 
 
@@ -72,15 +139,21 @@ def refund_unsettled():
     db.commit()
 
 
-def roll():
-    """Tung 3 xúc xắc; nếu admin đã /ep thì dùng kết quả ép (chỉ áp dụng 1 phiên)."""
+def roll(rid):
+    """Tung 3 xúc xắc; nếu admin đã /ep thì dùng kết quả ép (chỉ áp dụng 1 phiên).
+    Nổ hũ (3 con 1 / 3 con 6) chỉ xảy ra với xác suất JP_RATE, khi hũ > 0 và có người đặt đúng cửa."""
     f, G["force"] = G["force"], None
     if isinstance(f, list):
         return f
     if f == "bao":
-        return [random.randint(1, 6)] * 3
+        return [random.randint(2, 5)] * 3  # bão thường, không nổ hũ
+    sides = jp_sides(rid) if get_pot() > 0 else []
+    if f is None and sides and random.random() < JP_RATE:
+        return [1, 1, 1] if random.choice(sides) == "xiu" else [6, 6, 6]
     while True:
         d = [random.randint(1, 6) for _ in range(3)]
+        if is_jp_dice(d):
+            continue  # 3 con 1 / 3 con 6 chỉ ra qua nhánh nổ hũ ở trên
         if f is None or win_side(d) == f:
             return d
 
@@ -90,10 +163,11 @@ async def game_loop():
         rid = db.execute("select coalesce(max(id),0)+1 from rounds").fetchone()[0]
         G.update(id=rid, phase="bet", end=time.time() + BET_SEC, dice=None)
         await asyncio.sleep(BET_SEC)
-        d = roll()
+        d = roll(rid)
+        G["jp"] = jp_plan(rid, d)  # cược đã đóng nên tính trước được tiền hũ
         G.update(phase="cover", end=time.time() + COVER_SEC, dice=d)  # úp bát
         await asyncio.sleep(COVER_SEC)
-        settle(rid, d)
+        settle(rid, d, G["jp"])
         # Không chờ nữa: vòng lặp sang phiên mới ngay, kết quả phiên cũ gửi kèm trong "last"
         G["last"] = {"id": rid, "dice": d, "t": time.time()}
 
@@ -111,22 +185,29 @@ async def state(req):
     d = G["dice"] if G["phase"] != "bet" else None
     my = {r["side"]: r["a"] for r in db.execute(
         "select side,sum(amt) a from bets where rid=? and uid=? group by side", (G["id"], uid))}
+    jp = G["jp"]
+    plan = jp if jp and jp["id"] == G["id"] else None
     out = {
         "id": G["id"], "phase": G["phase"], "left": max(0, G["end"] - time.time()),
         "dice": d, "my": my, "tot": {s: tot(s) for s in ("tai", "xiu")},
         "bal": db.execute("select bal from users where uid=?", (uid,)).fetchone()[0],
+        "pot": get_pot(),
         "hist": [[r[0], r[1], r[2]] for r in db.execute("select d1,d2,d3 from rounds order by id desc limit 14")],
     }
     if d:
-        out["win"] = win_side(d)
-        out["net"] = net_of(my, out["win"])  # để client chớp kết quả ngay khi kéo bát
+        out["win"] = plan["side"] if plan else win_side(d)
+        out["net"] = round_net(my, d, plan, uid)  # để client chớp kết quả ngay khi kéo bát
+        if plan:
+            out["jp"] = jp_view(plan, uid)
     last = G["last"]
     if last:
         lmy = {r["side"]: r["a"] for r in db.execute(
             "select side,sum(amt) a from bets where rid=? and uid=? group by side", (last["id"], uid))}
-        lw = win_side(last["dice"])
-        out["last"] = {"id": last["id"], "dice": last["dice"], "win": lw, "my": lmy,
-                       "net": net_of(lmy, lw), "ago": time.time() - last["t"]}
+        lplan = jp if jp and jp["id"] == last["id"] else None
+        out["last"] = {"id": last["id"], "dice": last["dice"],
+                       "win": lplan["side"] if lplan else win_side(last["dice"]), "my": lmy,
+                       "net": round_net(lmy, last["dice"], lplan, uid), "ago": time.time() - last["t"],
+                       "jp": jp_view(lplan, uid) if lplan else None}
     return web.json_response(out)
 
 
@@ -190,6 +271,36 @@ async def nap(u: Update, c: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+def parse_amt(s):
+    """Chấp nhận 5000000 | 5,000,000 | 5.000.000 | 5m | 500k | 1.5m"""
+    s = s.strip().lower().replace(",", "").replace("_", "")
+    if re.fullmatch(r"\d{1,3}(\.\d{3})+", s):
+        s = s.replace(".", "")
+    mul = 1
+    if s.endswith("k"):
+        mul, s = 1000, s[:-1]
+    elif s.endswith("m"):
+        mul, s = 1000000, s[:-1]
+    return int(float(s) * mul)
+
+
+async def hu(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Admin: /hu <số tiền> để đặt số điểm trong hũ jackpot; /hu để xem hũ hiện tại."""
+    if u.effective_user.id not in ADMINS:
+        return
+    if not c.args:
+        return await u.message.reply_text(
+            f"Hũ jackpot hiện có: {get_pot():,} điểm ảo\nCú pháp: /hu <số tiền> (vd: /hu 5000000, /hu 5m)")
+    try:
+        v = parse_amt(c.args[0])
+        if v < 0:
+            raise ValueError
+    except Exception:
+        return await u.message.reply_text("Cú pháp: /hu <số tiền>  (vd: /hu 5000000, /hu 5m, /hu 500k)")
+    set_pot(v)
+    await u.message.reply_text(f"Đã đặt hũ jackpot: {v:,} điểm ảo")
+
+
 async def ep(u: Update, c: ContextTypes.DEFAULT_TYPE):
     """Admin: /ep 1 4 3 (ép 3 xúc xắc) | /ep t (Tài) | /ep x (Xỉu) | /ep b (Bão) | /ep huy (bỏ ép)."""
     if u.effective_user.id not in ADMINS:
@@ -213,7 +324,7 @@ async def ep(u: Update, c: ContextTypes.DEFAULT_TYPE):
 async def main():
     refund_unsettled()
     app = Application.builder().token(TOKEN).build()
-    for n, h in (("start", start), ("id", myid), ("sodu", sodu), ("nap", nap), ("ep", ep)):
+    for n, h in (("start", start), ("id", myid), ("sodu", sodu), ("nap", nap), ("ep", ep), ("hu", hu)):
         app.add_handler(CommandHandler(n, h))
     await app.initialize(); await app.start(); await app.updater.start_polling()
 

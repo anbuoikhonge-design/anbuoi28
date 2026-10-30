@@ -4,16 +4,16 @@ import asyncio
 from threading import Thread
 from flask import Flask
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 # Cấu hình thông tin bot và admin
 BOT_TOKEN = "9294891883:AAHsv-TTxyop9p_nCtqPEoPuaP3NXoo0bAk"
 ADMIN_ID = 7884394252
-GROUP_USERNAME_OR_ID = "@tungxxtest9" 
+GROUP_CHAT_ID = -1004331746455 
 
 forced_next_result = None
 
-# Tạo web server giả lập để Render Web Service nhận diện cổng HTTP
+# Web Server Flask giả lập để duy trì Render Web Service
 app_web = Flask(__name__)
 
 @app_web.route('/')
@@ -24,12 +24,13 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app_web.run(host="0.0.0.0", port=port)
 
-async def execute_roll(context: ContextTypes.DEFAULT_TYPE, dice_results=None):
+# Hàm xử lý tung xúc xắc và tính kết quả
+async def execute_roll(context: ContextTypes.DEFAULT_TYPE, target_chat_id, dice_results=None):
     global forced_next_result
     
     try:
         await context.bot.send_message(
-            chat_id=GROUP_USERNAME_OR_ID,
+            chat_id=target_chat_id,
             text="🎲 **Bắt đầu tung xúc xắc phiên mới!**",
             parse_mode="Markdown"
         )
@@ -43,7 +44,7 @@ async def execute_roll(context: ContextTypes.DEFAULT_TYPE, dice_results=None):
             actual_results = [random.randint(1, 6), random.randint(1, 6), random.randint(1, 6)]
 
         for _ in range(3):
-            await context.bot.send_dice(chat_id=GROUP_USERNAME_OR_ID, emoji='🎲')
+            await context.bot.send_dice(chat_id=target_chat_id, emoji='🎲')
             await asyncio.sleep(0.5)
 
         total_score = sum(actual_results)
@@ -58,11 +59,27 @@ async def execute_roll(context: ContextTypes.DEFAULT_TYPE, dice_results=None):
             f"💎 Tổng điểm: **{total_score}** | **{taixiu}** - **{chanle}** {icon_taixiu}"
         )
         
-        await context.bot.send_message(chat_id=GROUP_USERNAME_OR_ID, text=summary_text, parse_mode="Markdown")
+        await context.bot.send_message(chat_id=target_chat_id, text=summary_text, parse_mode="Markdown")
     
     except Exception as e:
-        print(f"Lỗi khi gửi vào nhóm: {e}")
+        print(f"Lỗi khi gửi vào chat ID {target_chat_id}: {e}")
 
+# Lệnh /start khi người dùng hoặc admin chat riêng với bot
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_name = update.effective_user.first_name
+    reply_msg = (
+        f"👋 Chào **{user_name}**!\n\n"
+        f"🤖 Bot Tài Xỉu đang hoạt động hoàn toàn bình thường 24/7.\n"
+        f"📌 **Nhóm mục tiêu:** `{GROUP_CHAT_ID}`\n"
+        f"⏱ Bot tự động tung xúc xắc mỗi 30 giây vào nhóm."
+    )
+    
+    if update.effective_user.id == ADMIN_ID:
+        reply_msg += "\n\n👑 **Quyền Admin:** Bạn có thể dùng lệnh `/ep [mặt 1] [mặt 2] [mặt 3]` tại đây để ép kết quả phiên tiếp theo trong nhóm!"
+
+    await update.message.reply_text(reply_msg, parse_mode="Markdown")
+
+# Lệnh ép kết quả dành riêng cho Admin /ep
 async def ep_ket_qua(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global forced_next_result
     user_id = update.effective_user.id
@@ -83,46 +100,52 @@ async def ep_ket_qua(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
         forced_next_result = dice_results
-        await update.message.reply_text(f"✅ Đã ép kết quả phiên tiếp theo thành: `{dice_results[0]} {dice_results[1]} {dice_results[2]}`", parse_mode="Markdown")
+        await update.message.reply_text(f"✅ Đã ép kết quả phiên tiếp theo trong nhóm thành: `{dice_results[0]} {dice_results[1]} {dice_results[2]}`", parse_mode="Markdown")
         
-        await execute_roll(context, dice_results)
+        # Thực hiện tung ngay lập tức vào nhóm
+        await execute_roll(context, GROUP_CHAT_ID, dice_results)
         
     except ValueError:
         await update.message.reply_text("⚠️ Vui lòng nhập các con số nguyên hợp lệ!")
 
+# Lắng nghe tin nhắn chat riêng từ người dùng
+async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type == "private":
+        await start_command(update, context)
+
+# Vòng lặp tự động tung xúc xắc mỗi 30 giây vào nhóm
 async def background_loop(app_instance):
-    # Đợi bot khởi động ổn định 5 giây đầu
     await asyncio.sleep(5)
     while True:
         try:
-            # Tạo một context giả lập để gọi hàm tung xúc xắc tự động
             class DummyContext:
                 def __init__(self, bot):
                     self.bot = bot
             
             ctx = DummyContext(app_instance.bot)
-            await execute_roll(ctx)
+            await execute_roll(ctx, GROUP_CHAT_ID)
         except Exception as e:
             print(f"Lỗi vòng lặp tự động: {e}")
         
-        # Chờ 30 giây cho phiên tiếp theo
         await asyncio.sleep(30)
 
 async def post_init(application):
-    # Chạy vòng lặp ngầm trực tiếp bằng Task độc lập, không phụ thuộc vào job_queue cũ
     asyncio.create_task(background_loop(application))
 
 def main():
-    # Chạy Web Server Flask ở một luồng riêng để đáp ứng yêu cầu của Render Web Service
+    # Khởi chạy máy chủ Flask phụ cho Render
     t = Thread(target=run_web)
     t.daemon = True
     t.start()
 
-    # Khởi động Bot Telegram
+    # Khởi tạo Bot Telegram
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
-    app.add_handler(CommandHandler("ep", ep_ket_qua))
     
-    print("Bot đang chạy và tự động trực nhóm mỗi 30 giây...")
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("ep", ep_ket_qua))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private_message))
+    
+    print("Bot đang chạy và đã sẵn sàng phục vụ...")
     app.run_polling()
 
 if __name__ == "__main__":

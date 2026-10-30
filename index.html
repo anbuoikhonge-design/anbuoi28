@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Tài Xỉu</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+html,body{width:100%;height:100%;overflow:hidden;background:#0d0806;color:#f6ead0;font-family:"Helvetica Neue",Arial,sans-serif}
+#st{position:absolute;left:50%;top:50%;width:760px;height:380px;transform-origin:center}
+.abs{position:absolute}
+#hd{left:16px;right:16px;top:6px;height:34px;display:flex;align-items:center;justify-content:space-between;font-size:14px}
+#hd b{font-size:22px;font-weight:700;letter-spacing:1px;color:#e8c77a;margin-right:10px}
+#msg{font-size:13px;color:#f6ead0;text-align:center;flex:1;padding:0 10px}
+#panel{left:14px;top:44px;width:732px;height:206px;border-radius:34px;background:linear-gradient(160deg,#a47d4e,#4a3220 45%,#2b1a0e);border:3px solid #d9b67a;box-shadow:0 8px 24px #000a}
+.tile{position:absolute;top:14px;width:250px;height:178px;border-radius:26px;border:2px solid #c9a063;background:linear-gradient(#6a4a2c,#2e1e10);border:0;font:inherit;cursor:pointer;overflow:hidden}
+.tile.sel{box-shadow:0 0 0 3px #ffe08a inset}
+.tile.win{box-shadow:0 0 0 4px #ffe08a inset,0 0 18px #ffd05a}
+.tile h2{position:absolute;left:0;right:0;top:14px;font-size:62px;font-weight:300;letter-spacing:1px}
+#bt{left:14px}#bx{right:14px}
+#bt h2{color:#1a0e06}#bx h2{color:#f6ead0}
+.pool,.mine{position:absolute;height:28px;border-radius:8px;display:grid;place-items:center;font-size:14px;color:#f6ead0}
+.pool{background:#5a0f1c;left:12px;bottom:12px;width:130px}
+.mine{background:#1a0e08;right:12px;bottom:12px;width:100px;font-size:12px;color:#e8c77a;border:1px solid #6a4a2c}
+.cnt{position:absolute;top:166px;height:26px;width:60px;border-radius:13px;background:#1a0e08;border:1px solid #6a4a2c;font-size:12px;display:grid;place-items:center}
+#hex{position:absolute;left:336px;top:164px;width:60px;height:30px;background:#2a1408;border:1px solid #c9a063;border-radius:8px;display:grid;place-items:center;color:#ffb347;font-size:16px}
+#circ{position:absolute;left:296px;top:14px;width:140px;height:140px;border-radius:50%;background:radial-gradient(#2a1510,#0c0606);border:4px solid #d9b67a}
+#cd{position:absolute;inset:0;display:grid;place-items:center;font-size:64px;font-weight:300}
+.dice{position:absolute;inset:0}
+.die{position:absolute;width:44px;height:44px;border-radius:9px;background:#c4161c;box-shadow:inset 0 -3px 0 #8e0e13;display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);padding:6px}
+.die i{width:7px;height:7px;border-radius:50%;background:#fff;place-self:center;opacity:0}.die i.on{opacity:1}
+.die:nth-child(1){left:22px;top:30px;transform:rotate(-14deg)}
+.die:nth-child(2){left:74px;top:44px;transform:rotate(12deg)}
+.die:nth-child(3){left:44px;top:80px;transform:rotate(4deg)}
+.bowl{position:absolute;inset:-6px;border-radius:50%;background:radial-gradient(circle at 38% 32%,#f3dcaa,#b98a4a 55%,#6b4a22);border:3px solid #f0d28f;display:grid;place-items:center;font-size:11px;color:#3a2410;text-align:center;touch-action:none;transition:transform .4s,opacity .4s}
+.bowl.can{cursor:grab}.bowl.drag{transition:none;cursor:grabbing}
+.bowl.lift{transform:translateY(-110px) scale(.9)!important;opacity:0;pointer-events:none}
+[data-ph=bet] .bowl,[data-ph=bet] .dice{display:none}
+[data-ph=cover] #cd,[data-ph=result] #cd{display:none}
+#dots{left:20px;right:20px;top:256px;height:22px;display:flex;justify-content:center;gap:9px}
+#dots span{width:20px;height:20px;border-radius:50%;border:2px solid #d9b67a}
+.dt{background:#f3e6c8}.dx{background:#0d0806}.db{background:#777}
+#chips{left:16px;top:284px;display:flex;gap:8px}
+.chip{width:84px;height:40px;border-radius:10px;border:1.5px solid #8a6a40;background:linear-gradient(#3a2616,#1c1109);color:#f6ead0;font:inherit;font-size:15px;cursor:pointer}
+.chip.sel{border-color:#ffe08a;color:#ffe08a;box-shadow:0 0 8px #ffd05a88}
+#btns{left:20px;top:332px;display:flex;gap:20px}
+.bt{height:40px;border-radius:20px;border:2px solid #f0d28f;font:inherit;font-size:15px;font-weight:700;color:#fff;cursor:pointer}
+#allin{width:160px;background:linear-gradient(#a24fd6,#4b1a78)}
+#ok{width:360px;background:linear-gradient(#e6c26e,#8a6420);color:#2a1808}
+#no{width:160px;background:linear-gradient(#c8324e,#6a0f22)}
+button:focus-visible{outline:3px solid #fff;outline-offset:2px}
+@media(prefers-reduced-motion:reduce){.bowl{transition:none}}
+</style>
+</head>
+<body>
+<div id="st">
+  <div id="hd" class="abs"><span><b>TÀI XỈU</b><span id="sid">#</span></span><div id="msg"></div><span id="bal">Số dư: 0</span></div>
+  <div id="panel" class="abs">
+    <button class="tile" id="bt"><h2>TÀI</h2><div class="pool" id="pt">0</div><div class="mine" id="mt">ĐẶT CƯỢC</div></button>
+    <button class="tile" id="bx"><h2>XỈU</h2><div class="pool" id="px">0</div><div class="mine" id="mx">ĐẶT CƯỢC</div></button>
+    <div id="circ" data-ph="bet"><div id="cd">--</div><div class="dice" id="dice"></div><div class="bowl" id="bowl">Kéo bát</div></div>
+    <div class="cnt" style="left:270px" id="ct">0</div><div id="hex"></div><div class="cnt" style="left:400px" id="cx">0</div>
+  </div>
+  <div id="dots" class="abs"></div>
+  <div id="chips" class="abs"></div>
+  <div id="btns" class="abs"><button class="bt" id="allin">ALL-IN</button><button class="bt" id="ok">ĐẶT CƯỢC</button><button class="bt" id="no">HỦY</button></div>
+</div>
+<script>
+window.onerror=m=>{const e=document.getElementById('msg');if(e)e.textContent='Lỗi: '+m};
+const tg=(window.Telegram&&Telegram.WebApp)||{};try{tg.ready();tg.expand()}catch(e){}
+const $=s=>document.querySelector(s),f=n=>(+n).toLocaleString('en-US');
+const PIPS={1:[4],2:[0,8],3:[0,4,8],4:[0,2,6,8],5:[0,2,4,6,8],6:[0,2,3,5,6,8]};
+const CH=[1e3,1e4,5e4,1e5,5e5,5e6,1e7,5e7],lab=v=>v>=1e6?v/1e6+'M':v/1e3+'K';
+const die=v=>`<div class="die">${[...Array(9)].map((_,i)=>`<i class="${v&&PIPS[v].includes(i)?'on':''}"></i>`).join('')}</div>`;
+const nm=d=>d[0]==d[1]&&d[1]==d[2]?'Bão':d[0]+d[1]+d[2]>=11?'Tài':'Xỉu';
+const api=async(p,b)=>(await fetch(p,{method:b?'POST':'GET',headers:{'X-Init':tg.initData||'','Content-Type':'application/json'},body:b&&JSON.stringify(b)})).json();
+let S=null,chip=1e3,pend={s:null,a:0},deadline=0,key='',lastId=0,errUntil=0,rot=false,sc=1,ox=0,oy=0;
+
+const st=$('#st');
+function fit(){const w=innerWidth,h=innerHeight;rot=h>w;sc=rot?Math.min(h/760,w/380):Math.min(w/760,h/380);
+ st.style.transform=`translate(-50%,-50%)${rot?' rotate(90deg)':''} scale(${sc})`}
+addEventListener('resize',fit);fit();
+
+CH.forEach(v=>{const b=document.createElement('button');b.className='chip';b.dataset.v=v;b.textContent=lab(v);b.onclick=()=>{chip=v;mark()};$('#chips').appendChild(b)});
+const mark=()=>document.querySelectorAll('.chip').forEach(b=>b.classList.toggle('sel',+b.dataset.v===chip));mark();
+const err=m=>{errUntil=Date.now()+2200;$('#msg').textContent=m};
+
+function render(){
+  const bw=$('#bowl'),k=S.id+S.phase;
+  if(S.id!==lastId){lastId=S.id;pend={s:null,a:0}}
+  if(k!==key){key=k;ox=oy=0;bw.style.transform=''}
+  deadline=Date.now()+S.left*1000;
+  $('#circ').dataset.ph=S.phase;
+  $('#sid').textContent='#'+S.id;$('#bal').textContent='Số dư: '+f(S.bal);
+  $('#pt').textContent=f(S.tot.tai[0]);$('#px').textContent=f(S.tot.xiu[0]);
+  $('#ct').textContent=S.tot.tai[1];$('#cx').textContent=S.tot.xiu[1];
+  const my=s=>(S.my[s]||0)+(pend.s===s?pend.a:0);
+  $('#mt').textContent=my('tai')?f(my('tai')):'ĐẶT CƯỢC';$('#mx').textContent=my('xiu')?f(my('xiu')):'ĐẶT CƯỢC';
+  $('#bt').classList.toggle('sel',pend.s==='tai');$('#bx').classList.toggle('sel',pend.s==='xiu');
+  $('#bt').classList.toggle('win',S.phase==='result'&&S.win==='tai');$('#bx').classList.toggle('win',S.phase==='result'&&S.win==='xiu');
+  $('#dice').innerHTML=(S.dice||[0,0,0]).map(die).join('');
+  bw.className='bowl'+(S.phase==='cover'?' can':S.phase==='result'?' lift':'');
+  $('#hex').textContent=S.phase==='result'?S.dice[0]+S.dice[1]+S.dice[2]:S.phase==='bet'?'':$('#hex').textContent;
+  $('#dots').innerHTML=[...S.hist].reverse().map(d=>{const n=nm(d);return `<span class="${n==='Tài'?'dt':n==='Xỉu'?'dx':'db'}"></span>`}).join('');
+  if(Date.now()<errUntil)return;
+  $('#msg').textContent=S.phase==='bet'?'Chọn chip, chạm Tài hoặc Xỉu, rồi bấm Đặt cược':
+    S.phase==='cover'?'Bát đã úp, kéo bát ra để xem':
+    `${S.dice.join(' - ')} = ${S.dice[0]+S.dice[1]+S.dice[2]}, ${nm(S.dice)}. `+(S.net>0?'Thắng +'+f(S.net):S.net<0?'Thua '+f(S.net):'');
+}
+async function tick(){try{const r=await api('/api/state');if(!r.err){S=r;render()}else $('#msg').textContent='Hãy mở từ nút trong bot Telegram'}catch(e){}}
+setInterval(tick,1000);tick();
+setInterval(()=>{if(!S)return;const t=Math.max(0,Math.ceil((deadline-Date.now())/1000));$('#cd').textContent=t;if(S.phase==='cover')$('#hex').textContent=t},250);
+
+function addSide(s){
+  if(!S||S.phase!=='bet')return;
+  if(S.my[s==='tai'?'xiu':'tai'])return err('Mỗi phiên chỉ cược một cửa');
+  if(pend.s!==s)pend={s,a:0};pend.a+=chip;render();
+}
+$('#bt').onclick=()=>addSide('tai');$('#bx').onclick=()=>addSide('xiu');
+$('#allin').onclick=()=>{if(!S||S.phase!=='bet')return;if(!pend.s)return err('Chọn Tài hoặc Xỉu trước');pend.a=S.bal;render()};
+$('#no').onclick=()=>{pend={s:null,a:0};if(S)render()};
+$('#ok').onclick=async()=>{
+  if(!S||S.phase!=='bet')return err('Đã hết giờ đặt cược');
+  if(!pend.s||!pend.a)return err('Chọn chip rồi chạm Tài hoặc Xỉu');
+  const r=await api('/api/bet',{side:pend.s,amt:pend.a});
+  if(r.err)err(r.err);else{pend={s:null,a:0};tg.HapticFeedback?.impactOccurred('light')}
+  tick();
+};
+
+const bw=$('#bowl');let px,py,sox,soy,dr=false;
+const conv=(dx,dy)=>rot?[dy/sc,-dx/sc]:[dx/sc,dy/sc];
+bw.onpointerdown=e=>{if(!S||S.phase!=='cover')return;bw.setPointerCapture(e.pointerId);bw.classList.add('drag');px=e.clientX;py=e.clientY;sox=ox;soy=oy;dr=true};
+bw.onpointermove=e=>{if(!dr)return;const[a,b]=conv(e.clientX-px,e.clientY-py);ox=sox+a;oy=soy+b;bw.style.transform=`translate(${ox}px,${oy}px)`};
+bw.onpointerup=bw.onpointercancel=()=>{dr=false;bw.classList.remove('drag')};
+</script>
+</body>
+</html>
